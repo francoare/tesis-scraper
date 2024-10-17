@@ -74,6 +74,7 @@ class Config:
         cls.HTML = {
             'xpath': "//div[@class='"+config.get('HTML', 'divTumbnailContainerID').strip('"')+"']//div[@jsname='"+config.get('HTML', 'thumbnailJsname').strip('"')+"']",
             'imgClass': config.get('HTML', 'imgClass').strip('"'),
+            'titleClass': config.get('HTML', 'titleClass').strip('"'),
             'verMasClass': config.get('HTML', 'verMasClass').strip('"'),
             'endVerMasClass': config.get('HTML', 'endVerMasClass').strip('"'),
             'endClass': config.get('HTML', 'endClass').strip('"'),
@@ -96,6 +97,7 @@ class Config:
             'cantidad_productores': config.getint('General', 'cantidad_productores'),
             'cantidad_consumidores': config.getint('General', 'cantidad_consumidores'),
             'cantidad_distance_calculators': config.getint('General', 'cantidad_distance_calculators'),
+            'trigger_cantidad_imagenes': config.getboolean('General', 'trigger_cantidad_imagenes'),
             'cantidadImagenes': config.getint('General', 'cantidadImagenes'),
             'headless': config.getboolean('General', 'headless'),
             'trigger_tiempo': config.getboolean('General', 'trigger_tiempo'),
@@ -133,11 +135,11 @@ class Node():
         self.distance = None
         self.path = None #Path en donde se encuentra descargada la imagen
         self.padre = padre #Nodo padre
-        
-        self.nodosHijos = list() #Lista de referencias a nodos hijos
         self.estado = Estado.SIN_ASIGNAR # Estado del arbol
         
+        
         # ---- Parametros en caso de que se extienda el nodo ---- #
+        self.nodosHijos = list() #Lista de referencias a nodos hijos
         self.cantidadRecorridos = 0 #Cantidad de imagenes relacionadas recorridas
         #Cantidad de imagenes perdidas a la hora de producir
         self.cantidadTimeOut = 0
@@ -402,11 +404,27 @@ class Producer(threading.Thread):
                 
                 #Si aparece el boton, guardo el link al que me lleva el boton
                 urlVerMas = driver.find_element(By.CSS_SELECTOR, Config.HTML['verMasClass']).get_attribute("href")
-                nodoHijo = Node(query=nodoActual.getQuery(), url=urlVerMas, imgLink=linkImagen, nivel = nodoActual.getNivel() + 1, padre = nodoActual)
-                # print(self.name + ": ANTES ")
-                self.manager.addNodoProducer(nodoHijo)
-                print(self.name + ": se pudo ingresar el elemento " + linkImagen)
-                return True
+                
+                try:
+                    #Espera a que este presente el titulo
+                    title_present = EC.presence_of_element_located((By.CSS_SELECTOR, Config.HTML['titleClass']))
+                    WebDriverWait(driver, self.waitLoadTimeOut).until(title_present)
+                    
+                    #Si aparece el boton, guardo el link al que me lleva el boton
+                    urlVerMas = driver.find_element(By.CSS_SELECTOR, Config.HTML['verMasClass']).get_attribute("href")
+                    
+                    
+                    nodoHijo = Node(query=nodoActual.getQuery(), url=urlVerMas, imgLink=linkImagen, nivel = nodoActual.getNivel() + 1, padre = nodoActual)
+                    # print(self.name + ": ANTES ")
+                    self.manager.addNodoProducer(nodoHijo)
+                    print(self.name + ": se pudo ingresar el elemento " + linkImagen)
+                    return True
+
+                except TimeoutException as ex:
+                    print(self.name + ": Time out waiting See More button to load")
+                    nodoActual.addCantidadTimeouts(1) 
+                    return False
+                
 
             except TimeoutException as ex:
                 print(self.name + ": Time out waiting See More button to load")
@@ -535,9 +553,10 @@ class DistanceCalculator(threading.Thread):
 
 
 class Manager():
-    def __init__(self, queries, cantidadImagenes, path, cantidadProducers = 1, cantidadConsumers = 1, cantidadDistanceCalculators = 1, 
+    def __init__(self, queries, trigger_cantidad_imagenes, cantidadImagenes, path, cantidadProducers = 1, cantidadConsumers = 1, cantidadDistanceCalculators = 1, 
                  name=None, anchura = 0, queueTimeout = 5, queueSize = 10, headless = True):
         # Thread.__init__(self, name=name)
+        self.trigger_cantidad_imagenes = trigger_cantidad_imagenes
         self.cantImagenesSolicitadas = cantidadImagenes
         self.path = path
         self.cantidadProducers  = cantidadProducers
@@ -627,7 +646,7 @@ class Manager():
                     with open(Config.Files['csvThroughput'], 'a') as f:
                         csv.writer(f).writerow([throughputTime_end-self.tiempo])
                     self.tiempo = time.time()
-                if(len(self.nodosExitosos)>= self.cantImagenesSolicitadas):
+                if self.trigger_cantidad_imagenes and len(self.nodosExitosos)>=self.cantImagenesSolicitadas:
                     self.__apagar()
         else:
             nodo.getPadre().addCantidadPodados(1)
@@ -740,7 +759,6 @@ def resetCsvOutput():
             csv.writer(nodesFile).writerow(nodesHeader)
 
     
-
 def crearArchivoNodos(nodos):
     imgHeader = ['Referencia','Query','Padre','Nivel','URL','Path','Distance']
     nodesHeader = ['Referencia','Query','Padre','Nivel','URL','Path','Distance','Imagenes Exitosas','Imagenes Recorridas','TimeOuts','Repetidas','Descargas fallidas','Svdd Fallidas']
@@ -775,7 +793,7 @@ def main():
     resetCsvOutput()
     
 
-    manager = Manager(queries=Config.Queries, cantidadImagenes=Config.General['cantidadImagenes'], path=Config.Files['outputPath'], name="manager", cantidadProducers= Config.General['cantidad_productores'], 
+    manager = Manager(queries=Config.Queries, trigger_cantidad_imagenes=Config.General['trigger_cantidad_imagenes'], cantidadImagenes=Config.General['cantidadImagenes'], path=Config.Files['outputPath'], name="manager", cantidadProducers= Config.General['cantidad_productores'], 
                       cantidadConsumers=Config.General['cantidad_consumidores'], cantidadDistanceCalculators=Config.General['cantidad_distance_calculators'], headless=Config.General['headless'])
     manager.comenzar()
 
